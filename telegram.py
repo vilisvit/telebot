@@ -7,9 +7,18 @@ from random import randint
 
 print(telebot.__file__)
 
+site=''
+username=''
+password=''
+contest_id=''
+problem_id=''
+source_code=''
+lang_id=''
+session = requests.Session()
+
 OWM_API = open("owm-api.txt", "r").read()
 BOT_TOKEN = open("telegram-bot-token.txt", "r").read()
-DIALOG_FLOW_TOKEN = open("dialogflow-token.txt", "r").read()
+DIALOG_FLOW_TOKEN = open("dialog-flow-token.txt", "r").read()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 owm = pyowm.OWM(OWM_API)
@@ -27,11 +36,12 @@ def send_welcome(message):
 @bot.message_handler(commands=["help"])
 def send_help(message):
     s='''Вот мои команды:
-        /help - помощь
-        /weather - погода на текущий момент
-        /joke - рандомная шутка из интернета
-        Также я реагирую на различные типы сообщений.
-        Можешь просто пообщаться со мной!'''
+/help - помощь
+/weather - погода на текущий момент
+/joke - рандомная шутка из интернета
+/dots - загрузка решений в тестирующую систему DOTS для задач по программированию
+Также я реагирую на различные типы сообщений.
+Можешь просто пообщаться со мной!'''
     bot.send_message(message.chat.id, s)
 
 @bot.message_handler(commands=["weather"])
@@ -62,6 +72,134 @@ def send_weather (message):
             bot.send_message(message.chat.id, "Не знаю где жарче в печке или на улице...")
     except:
         bot.send_message(message.chat.id, f"Я не могу найти населенный пункт с названием {message.text}")
+
+@bot.message_handler(commands=["dots"])
+def ask_site (message):
+    sent = bot.send_message(message.chat.id, """Команда /exit для выхода. 
+Введи название сайта тестирующей системы DOTS (q-bit)""")
+    bot.register_next_step_handler(sent, ask_username)
+def ask_username (message):
+    if message.text=="/exit":
+        return
+    global site
+    site=message.text
+    try:
+        r = requests.get(f"https://{site}.dots.org.ua")
+        r.encoding = "utf-8"
+        page_text = r.text
+        bot.send_message(message.chat.id, page_text[page_text.find("<title>") + len("<title>") : page_text.find("</title>")])
+    except:
+        bot.send_message(message.chat.id, "Что-то пошло не так")
+        return
+    sent = bot.send_message(message.chat.id, "Введи логин от системы")
+    bot.register_next_step_handler(sent, ask_password)
+def ask_password (message):
+    if message.text=="/exit":
+        return
+    global username
+    username=message.text
+    sent = bot.send_message(message.chat.id, "Введи пароль от системы. Обещаю, что никому его не расскажу")
+    bot.register_next_step_handler(sent, ask_contest_id)
+def ask_contest_id (message):
+    if message.text=="/exit":
+        return
+    global username
+    bot.delete_message(message.chat.id, message.message_id)
+    bot.delete_message(message.chat.id, message.message_id-1)
+    password=message.text
+    login_form = {
+        "from": "",
+        "username": username,
+        "password": password,
+    }
+    r = session.post(f"https://{site}.dots.org.ua/login", data=login_form)
+    r = session.get(f"http://{site}.dots.org.ua/contests")
+    r.encoding = "utf-8"
+    contests_page = r.text
+    contests_page = contests_page[contests_page.find('<a href="contests?id') :]
+    res="Доступные турниры:\n"
+    while contests_page.find('<a href="contests?id') != -1:
+        if contests_page.find(">")+1 == contests_page.find('<font color="red">'):
+            res+=contests_page[contests_page.find('<font color="red">')+18 : contests_page.find("</font>")]
+            res+=" ID="+contests_page[contests_page.find('<a href="contests?id=')+21 : contests_page.find('">')]+"\n"
+        else:
+            res+=contests_page[contests_page.find(">")+1 : contests_page.find("</a>")]
+            res+=" ID="+contests_page[contests_page.find('<a href="contests?id=')+21 : contests_page.find('">')]+"\n"
+        contests_page = contests_page[contests_page.find('<a href="contests?id', 1) :]
+    if res.strip()=="Доступные турниры:":
+        bot.send_message(message.chat.id, "Нет доступных турниров")
+        return
+    else:
+        print(res.strip())
+        bot.send_message(message.chat.id, res)
+    sent = bot.send_message(message.chat.id, "Введи ID контеста (турнира)")
+    bot.register_next_step_handler(sent, ask_problem_id)
+def ask_problem_id (message):
+    if message.text=="/exit":
+        return
+    global contest_id
+    global site
+    contest_id=message.text
+    try:
+        r = session.get(f"http://{site}.dots.org.ua/contests?login={contest_id}")
+        r.encoding = "utf-8"
+        page_text = r.text
+        bot.send_message(message.chat.id, page_text[page_text.find("<title>") + len("<title>") : page_text.find("</title>")])
+    except:
+        bot.send_message(message.chat.id, "Что-то пошло не так")
+        return
+    r = session.get(f"http://{site}.dots.org.ua/problems")
+    r.encoding = "utf-8"
+    problems_page = r.text
+    problems_page = problems_page[problems_page.find('<td class="pt" ><a href="problems?id=', 1) :]
+    res="Доступные задачи:"
+    while problems_page.find('<td class="pt" ><a href="problems?id=') != -1:
+        res+=problems_page[problems_page.find('">')+2 : problems_page.find('</a>')]
+        res+=" ID="+problems_page[problems_page.find('<td class="pt" ><a href="problems?id=')+36 : problems_page.find('">')]+"\n"
+        problems_page = problems_page[problems_page.find('<td class="pt" ><a href="problems?id=', 1) :]
+    if res.strip()=="Доступные задачи:\n":
+        bot.send_message(message.chat.id, "Нет доступных задач")
+        return
+    else:
+        bot.send_message(message.chat.id, res)
+    sent = bot.send_message(message.chat.id, "Введи ID задачи")
+    bot.register_next_step_handler(sent, ask_lang_id)
+def ask_lang_id (message):
+    if message.text=="/exit":
+        return
+    global problem_id
+    problem_id=message.text
+    sent = bot.send_message(message.chat.id, "Введи ID языка программирования")
+    bot.register_next_step_handler(sent, ask_source_code)
+def ask_source_code (message):
+    if message.text=="/exit":
+        return
+    global lang_id
+    lang_id=message.text
+    sent = bot.send_message(message.chat.id, "Введи решение задачи")
+    bot.register_next_step_handler(sent, send_source_code)
+def send_source_code (message):
+    if message.text=="/exit":
+        return
+    global source_code
+    source_code=message.text
+    solution_form = {
+        "new": "2",
+        "MAX_FILE_SIZE": "2097152",
+        "pid": problem_id,
+        "lang": lang_id,
+        "ctype": "F",
+        "source": source_code,
+    }
+    try:
+        r = session.post(f"http://{site}.dots.org.ua/solutions", data=solution_form)
+    except:
+        bot.send_message(message.chat.id, "Что-то пошло не так")
+        return
+    if r.status_code==200:
+        bot.send_message(message.chat.id, "Решение успешно отпралено")
+    else:
+        bot.send_message(message.chat.id, "Что-то пошло не так")
 
 @bot.message_handler(commands=['joke'])
 def send_joke(message):
